@@ -171,6 +171,88 @@ describe("AlertEngine", () => {
     expect(all.length).toBe(2); // one resolved + one active
   });
 
+  it("should trigger multiple rules independently for the same service", () => {
+    const escalatingRules: AlertRule[] = [
+      { id: "rule-warn", serviceId: "db-service", severity: "warning", consecutiveFailures: 2, description: "DB degraded" },
+      { id: "rule-crit", serviceId: "db-service", severity: "critical", consecutiveFailures: 4, description: "DB is down" },
+    ];
+    const escalationEngine = new AlertEngine(escalatingRules, notifier);
+
+    // 2 failures — warning triggers, critical does not
+    escalationEngine.processResult(makeResult("db-service", "unhealthy"));
+    escalationEngine.processResult(makeResult("db-service", "unhealthy"));
+
+    expect(escalationEngine.getActiveAlerts().length).toBe(1);
+    expect(escalationEngine.getActiveAlerts()[0].severity).toBe("warning");
+
+    // 4 failures — critical should also trigger
+    escalationEngine.processResult(makeResult("db-service", "unhealthy"));
+    escalationEngine.processResult(makeResult("db-service", "unhealthy"));
+
+    const active = escalationEngine.getActiveAlerts();
+    expect(active.length).toBe(2);
+    expect(active.map((a) => a.severity).sort()).toEqual(["critical", "warning"]);
+  });
+
+  it("should resolve all active alerts for a service on recovery", () => {
+    const escalatingRules: AlertRule[] = [
+      { id: "rule-warn", serviceId: "db-service", severity: "warning", consecutiveFailures: 2 },
+      { id: "rule-crit", serviceId: "db-service", severity: "critical", consecutiveFailures: 3 },
+    ];
+    const escalationEngine = new AlertEngine(escalatingRules, notifier);
+
+    // Trigger both alerts
+    escalationEngine.processResult(makeResult("db-service", "unhealthy"));
+    escalationEngine.processResult(makeResult("db-service", "unhealthy"));
+    escalationEngine.processResult(makeResult("db-service", "unhealthy"));
+
+    expect(escalationEngine.getActiveAlerts().length).toBe(2);
+
+    // Recovery should resolve both
+    escalationEngine.processResult(makeResult("db-service", "healthy"));
+
+    expect(escalationEngine.getActiveAlerts().length).toBe(0);
+    expect(escalationEngine.getAllAlerts().length).toBe(2);
+    expect(escalationEngine.getAllAlerts().every((a) => a.status === "resolved")).toBe(true);
+  });
+
+  it("should not double-count failures when multiple rules match the same service", () => {
+    const multiRules: AlertRule[] = [
+      { id: "rule-a", serviceId: "shared-svc", severity: "warning", consecutiveFailures: 3 },
+      { id: "rule-b", serviceId: "shared-svc", severity: "critical", consecutiveFailures: 3 },
+    ];
+    const multiEngine = new AlertEngine(multiRules, notifier);
+
+    // One unhealthy result should count as 1 failure, not 2
+    multiEngine.processResult(makeResult("shared-svc", "unhealthy"));
+    multiEngine.processResult(makeResult("shared-svc", "unhealthy"));
+
+    // Only 2 failures — threshold is 3, should NOT alert yet
+    expect(multiEngine.getActiveAlerts().length).toBe(0);
+  });
+
+  it("should not crash when notifier rejects", () => {
+    notifier.notify = async () => {
+      throw new Error("notify failed");
+    };
+    engine = new AlertEngine(rules, notifier);
+
+    // Should not throw
+    expect(() => {
+      engine.processResult(makeResult("auth-service", "unhealthy"));
+      engine.processResult(makeResult("auth-service", "unhealthy"));
+    }).not.toThrow();
+  });
+
+  it("should reject duplicate rule ids", () => {
+    const dupeRules: AlertRule[] = [
+      { id: "rule-1", serviceId: "svc-a", severity: "warning", consecutiveFailures: 2 },
+      { id: "rule-1", serviceId: "svc-b", severity: "critical", consecutiveFailures: 3 },
+    ];
+
+    expect(() => new AlertEngine(dupeRules, notifier)).toThrow("Duplicate rule id: rule-1");
+  });
+
   it("should call onAlert callback when alert triggers", () => {
     const triggered: Alert[] = [];
     engine = new AlertEngine(rules, notifier, {
