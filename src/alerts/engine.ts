@@ -6,6 +6,7 @@ import { createLogger } from "../utils/logger";
 const logger = createLogger("AlertEngine");
 
 export class AlertEngine {
+  private alertSeq = 0;
   private failureCounts: Map<string, number> = new Map();
   private activeAlerts: Map<string, Alert> = new Map();
   private allAlerts: Alert[] = [];
@@ -48,7 +49,7 @@ export class AlertEngine {
           !this.activeAlerts.has(rule.id)
         ) {
           const alert: Alert = {
-            id: `alert-${rule.id}-${Date.now()}`,
+            id: `alert-${rule.id}-${++this.alertSeq}`,
             ruleId: rule.id,
             serviceId: result.serviceId,
             severity: rule.severity,
@@ -68,13 +69,19 @@ export class AlertEngine {
       } else {
         const existing = this.activeAlerts.get(rule.id);
         if (existing) {
-          existing.status = "resolved";
-          existing.resolvedAt = new Date();
+          const resolved: Alert = {
+            ...existing,
+            status: "resolved",
+            resolvedAt: new Date(),
+          };
+          // Update in allAlerts history
+          const idx = this.allAlerts.indexOf(existing);
+          if (idx !== -1) this.allAlerts[idx] = resolved;
           this.activeAlerts.delete(rule.id);
-          this.notifier.notify(existing).catch((err) =>
+          this.notifier.notify(resolved).catch((err) =>
             logger.error("Notifier failed", { error: String(err) })
           );
-          this.options.onResolve?.(existing);
+          this.options.onResolve?.(resolved);
         }
       }
     }

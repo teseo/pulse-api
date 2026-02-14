@@ -231,17 +231,58 @@ describe("AlertEngine", () => {
     expect(multiEngine.getActiveAlerts().length).toBe(0);
   });
 
-  it("should not crash when notifier rejects", () => {
+  it("should notify with status active before resolving mutates the alert", async () => {
+    // Simulate a slow async notifier that captures alert state after a delay
+    const capturedStatuses: string[] = [];
+    notifier.notify = async (alert: Alert) => {
+      // Capture status at the time the notifier processes the alert
+      await new Promise((r) => setTimeout(r, 10));
+      capturedStatuses.push(alert.status);
+    };
+    engine = new AlertEngine(rules, notifier);
+
+    // Trigger alert
+    engine.processResult(makeResult("auth-service", "unhealthy"));
+    engine.processResult(makeResult("auth-service", "unhealthy"));
+
+    // Immediately resolve
+    engine.processResult(makeResult("auth-service", "healthy"));
+
+    // Wait for both async notifiers to complete
+    await new Promise((r) => setTimeout(r, 50));
+
+    // The active notification must have captured "active", not "resolved"
+    expect(capturedStatuses).toEqual(["active", "resolved"]);
+  });
+
+  it("should generate unique alert ids for rapid trigger-resolve-trigger cycles", () => {
+    // Trigger, resolve, re-trigger in same millisecond
+    engine.processResult(makeResult("auth-service", "unhealthy"));
+    engine.processResult(makeResult("auth-service", "unhealthy"));
+    engine.processResult(makeResult("auth-service", "healthy"));
+    engine.processResult(makeResult("auth-service", "unhealthy"));
+    engine.processResult(makeResult("auth-service", "unhealthy"));
+
+    const all = engine.getAllAlerts();
+    expect(all.length).toBe(2);
+
+    const ids = all.map((a) => a.id);
+    expect(new Set(ids).size).toBe(2); // IDs must be unique
+  });
+
+  it("should not crash when notifier rejects", async () => {
     notifier.notify = async () => {
       throw new Error("notify failed");
     };
     engine = new AlertEngine(rules, notifier);
 
-    // Should not throw
-    expect(() => {
-      engine.processResult(makeResult("auth-service", "unhealthy"));
-      engine.processResult(makeResult("auth-service", "unhealthy"));
-    }).not.toThrow();
+    engine.processResult(makeResult("auth-service", "unhealthy"));
+    engine.processResult(makeResult("auth-service", "unhealthy"));
+
+    // Flush microtask queue — if .catch is missing, this would cause unhandled rejection
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(engine.getActiveAlerts().length).toBe(1);
   });
 
   it("should reject duplicate rule ids", () => {
