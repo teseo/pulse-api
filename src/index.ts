@@ -27,7 +27,7 @@ app.use("/services", createServicesRouter(registry, storage));
 registry.register({
   id: "api-gateway",
   name: "API Gateway",
-  url: "https://httpstat.us/200",
+  url: "https://httpbingo.org/status/200",
   strategy: "http",
   intervalMs: 30000,
   timeoutMs: 5000,
@@ -36,7 +36,7 @@ registry.register({
 registry.register({
   id: "auth-service",
   name: "Auth Service",
-  url: "https://httpstat.us/200",
+  url: "https://httpbingo.org/status/200",
   strategy: "http",
   intervalMs: 30000,
   timeoutMs: 5000,
@@ -45,7 +45,7 @@ registry.register({
 registry.register({
   id: "payment-service",
   name: "Payment Service",
-  url: "https://httpstat.us/503",
+  url: "https://httpbingo.org/status/503",
   strategy: "http",
   intervalMs: 30000,
   timeoutMs: 5000,
