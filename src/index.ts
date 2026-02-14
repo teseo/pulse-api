@@ -5,7 +5,10 @@ import { CheckRunner } from "./checks/runner";
 import { MemoryStorage } from "./storage/memory";
 import healthRouter from "./routes/health";
 import { createServicesRouter } from "./routes/services";
-// import { createAlertsRouter } from "./routes/alerts";  // TODO: uncomment when AlertEngine is implemented
+import { createAlertsRouter } from "./routes/alerts";
+import { AlertEngine } from "./alerts/engine";
+import { ConsoleNotifier } from "./alerts/notifiers/console";
+import type { AlertRule } from "./alerts/types";
 import { createLogger } from "./utils/logger";
 
 const logger = createLogger("Server");
@@ -21,7 +24,35 @@ const runner = new CheckRunner(storage);
 // Routes
 app.use("/health", healthRouter);
 app.use("/services", createServicesRouter(registry, storage));
-// app.use("/alerts", createAlertsRouter(alertEngine));  // TODO: wire up when AlertEngine is implemented
+// Alert engine
+const alertRules: AlertRule[] = [
+  {
+    id: "rule-api",
+    serviceId: "api-gateway",
+    severity: "critical",
+    consecutiveFailures: 3,
+    description: "API Gateway is down",
+  },
+  {
+    id: "rule-auth",
+    serviceId: "auth-service",
+    severity: "warning",
+    consecutiveFailures: 3,
+    description: "Auth Service is failing",
+  },
+  {
+    id: "rule-payment",
+    serviceId: "payment-service",
+    severity: "critical",
+    consecutiveFailures: 3,
+    description: "Payment Service is down",
+  },
+];
+
+const alertEngine = new AlertEngine(alertRules, new ConsoleNotifier());
+runner.onResult((result) => alertEngine.processResult(result));
+
+app.use("/alerts", createAlertsRouter(alertEngine));
 
 // Register some demo services
 registry.register({
@@ -45,7 +76,7 @@ registry.register({
 registry.register({
   id: "payment-service",
   name: "Payment Service",
-  url: "https://httpbingo.org/status/503",
+  url: "https://httpbingo.org/status/200",
   strategy: "http",
   intervalMs: 30000,
   timeoutMs: 5000,

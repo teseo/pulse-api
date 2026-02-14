@@ -197,4 +197,89 @@ describe("AlertEngine", () => {
     expect(resolved.length).toBe(1);
     expect(resolved[0].status).toBe("resolved");
   });
+
+  it("should not crash when notifier rejects", () => {
+    notifier.notify = async () => {
+      throw new Error("notification failed");
+    };
+    engine = new AlertEngine(rules, notifier);
+
+    // Should not throw
+    expect(() => {
+      engine.processResult(makeResult("auth-service", "unhealthy"));
+      engine.processResult(makeResult("auth-service", "unhealthy"));
+    }).not.toThrow();
+  });
+
+  it("should not crash when notifier throws synchronously", () => {
+    notifier.notify = (() => {
+      throw new Error("sync kaboom");
+    }) as any;
+    engine = new AlertEngine(rules, notifier);
+
+    expect(() => {
+      engine.processResult(makeResult("auth-service", "unhealthy"));
+      engine.processResult(makeResult("auth-service", "unhealthy"));
+    }).not.toThrow();
+  });
+
+  it("should support multiple rules for the same service with different thresholds", () => {
+    const multiRules: AlertRule[] = [
+      {
+        id: "rule-api-warning",
+        serviceId: "api-gateway",
+        severity: "warning",
+        consecutiveFailures: 2,
+        description: "API Gateway degraded",
+      },
+      {
+        id: "rule-api-critical",
+        serviceId: "api-gateway",
+        severity: "critical",
+        consecutiveFailures: 4,
+        description: "API Gateway is down",
+      },
+    ];
+    engine = new AlertEngine(multiRules, notifier);
+
+    // 2 failures: warning fires, critical does not
+    engine.processResult(makeResult("api-gateway", "unhealthy"));
+    engine.processResult(makeResult("api-gateway", "unhealthy"));
+
+    let alerts = engine.getActiveAlerts();
+    expect(alerts.length).toBe(1);
+    expect(alerts[0].severity).toBe("warning");
+
+    // 4 failures: critical also fires
+    engine.processResult(makeResult("api-gateway", "unhealthy"));
+    engine.processResult(makeResult("api-gateway", "unhealthy"));
+
+    alerts = engine.getActiveAlerts();
+    expect(alerts.length).toBe(2);
+    const severities = alerts.map((a) => a.severity).sort();
+    expect(severities).toEqual(["critical", "warning"]);
+
+    // Recovery resolves both
+    engine.processResult(makeResult("api-gateway", "healthy"));
+    expect(engine.getActiveAlerts().length).toBe(0);
+
+    // All 4 notifications: warning active, critical active, warning resolved, critical resolved
+    expect(notifiedAlerts.length).toBe(4);
+  });
+
+  it("should emit alert snapshots, not shared references", () => {
+    engine.processResult(makeResult("api-gateway", "unhealthy"));
+    engine.processResult(makeResult("api-gateway", "unhealthy"));
+    engine.processResult(makeResult("api-gateway", "unhealthy"));
+
+    // Capture the emitted "active" alert
+    const emittedActive = notifiedAlerts[0];
+    expect(emittedActive.status).toBe("active");
+
+    // Resolve the alert
+    engine.processResult(makeResult("api-gateway", "healthy"));
+
+    // The previously emitted active alert should still be "active"
+    expect(emittedActive.status).toBe("active");
+  });
 });
